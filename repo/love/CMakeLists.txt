@@ -1814,7 +1814,9 @@ endif()
 
 if(NINTENDO_SWITCH)
 	add_library(${LOVE_LIB_NAME} STATIC ${LOVE_LIB_SRC} ${LOVE_RC})
-	set(LOVE_3P ${LOVE_3P} SDL2 vorbis vorbisidec ogg bz2 png16 EGL glapi drm_nouveau nx)
+	# curl provides love.system.httpDownload. This switch-curl build uses the
+	# libnx TLS backend, so its only extra dependency is z (no mbedtls).
+	set(LOVE_3P ${LOVE_3P} SDL2 vorbis vorbisidec ogg bz2 png16 EGL glapi drm_nouveau curl z nx)
 else()
 	add_library(${LOVE_LIB_NAME} SHARED ${LOVE_LIB_SRC} ${LOVE_RC})
 endif()

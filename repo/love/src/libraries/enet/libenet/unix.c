@@ -46,6 +46,33 @@
 #endif
 #endif
 
+#ifdef __SWITCH__
+/* libnx provides fcntl, poll, getaddrinfo/getnameinfo and inet_pton/ntop.
+ * HAS_MSGHDR_FLAGS is deliberately left out: the libnx bsd service does not
+ * report MSG_TRUNC through msghdr.msg_flags. */
+#ifndef HAS_FCNTL
+#define HAS_FCNTL 1
+#endif
+#ifndef HAS_POLL
+#define HAS_POLL 1
+#endif
+#ifndef HAS_INET_PTON
+#define HAS_INET_PTON 1
+#endif
+#ifndef HAS_INET_NTOP
+#define HAS_INET_NTOP 1
+#endif
+#ifndef HAS_SOCKLEN_T
+#define HAS_SOCKLEN_T 1
+#endif
+#ifndef HAS_GETADDRINFO
+#define HAS_GETADDRINFO 1
+#endif
+#ifndef HAS_GETNAMEINFO
+#define HAS_GETNAMEINFO 1
+#endif
+#endif /* __SWITCH__ */
+
 #ifdef HAS_FCNTL
 #include <fcntl.h>
 #endif

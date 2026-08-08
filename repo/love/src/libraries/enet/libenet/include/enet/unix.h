@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#ifdef __SWITCH__
+/* newlib hides fd_set from sys/types.h under -std=c++11 (strict ANSI) */
+#include <sys/select.h>
+#endif
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
