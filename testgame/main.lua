@@ -3,9 +3,16 @@
 -- On a Switch with wifi disabled every check must fail with a clean Lua
 -- error instead of crashing or hanging.
 
+-- Operator knobs for PC-side helpers (leave empty to skip those checks).
+local PC_TCP_HOST = "" -- set to your PC LAN IP to enable tcp pc relay
+local PC_TCP_PORT = 7778
+local PC_ENET_HOLD = true -- keep :7777 hosted after checks for pc_enet_peer.py
+
 local results = {}
 local lines = {}
 local done = false
+local lan_ip = nil
+local live_enet_host = nil
 
 local function log(msg)
 	table.insert(lines, msg)
@@ -26,8 +33,6 @@ end
 local function expect(cond, msg)
 	if not cond then error(msg, 2) end
 end
-
-local t0
 
 local function runChecks()
 	check("require socket returns table", function()
@@ -57,17 +62,88 @@ local function runChecks()
 		udp:close()
 		expect(ip and ip ~= "0.0.0.0", "getsockname gave " .. tostring(ip))
 		expect(port ~= nil, "no port")
+		lan_ip = ip
 		log("  LAN IP: " .. tostring(ip) .. ":" .. tostring(port))
 	end)
 
-	check("tcp connect/send/receive relay 7778", function()
+	-- Same-console TCP listen+connect is unreliable on some libnx setups
+	-- (SO_REUSEADDR / hairpin to own LAN IP). Prefer PC relay as stack proof.
+	check("tcp local echo (best-effort)", function()
+		expect(lan_ip, "no LAN IP from udp check")
+		local socket = require("socket")
+		local port = 17890
+		local server = socket.tcp()
+		expect(server, "server tcp() nil")
+		server:settimeout(3)
+		-- libnx may reject reuseaddr; bind still works without it.
+		pcall(function() server:setoption("reuseaddr", true) end)
+		local bok, berr = server:bind("*", port)
+		expect(bok, "bind: " .. tostring(berr))
+		expect(server:listen(1), "listen failed")
+
+		local client = socket.tcp()
+		expect(client, "client tcp() nil")
+		client:settimeout(3)
+		local cok, cerr = client:connect(lan_ip, port)
+		if not cok then
+			server:close()
+			client:close()
+			error("self-connect unsupported on this console: " .. tostring(cerr)
+				.. " (TCP stack already proven if tcp pc relay PASSed)", 0)
+		end
+
+		local peer = server:accept()
+		expect(peer, "accept returned nil")
+		peer:settimeout(3)
+
+		local payload = '{"hello":"love-nx"}\n'
+		local sent, serr = client:send(payload)
+		expect(sent == #payload, "send: " .. tostring(serr) .. " sent=" .. tostring(sent))
+
+		local line, rerr = peer:receive("*l")
+		expect(line, "server receive: " .. tostring(rerr))
+		local reply = "ack:" .. line .. "\n"
+		local rsent, rserr = peer:send(reply)
+		expect(rsent == #reply, "peer send: " .. tostring(rserr))
+
+		local got, gerr = client:receive("*l")
+		client:close()
+		peer:close()
+		server:close()
+		expect(got == "ack:" .. line, "client receive: " .. tostring(gerr) .. " got=" .. tostring(got))
+		log("  local echo: " .. tostring(got))
+	end)
+
+	if PC_TCP_HOST ~= "" then
+		check("tcp pc relay " .. PC_TCP_HOST .. ":" .. PC_TCP_PORT, function()
+			local socket = require("socket")
+			local tcp = socket.tcp()
+			expect(tcp, "socket.tcp() returned nil")
+			tcp:settimeout(10)
+			local ok, err = tcp:connect(PC_TCP_HOST, PC_TCP_PORT)
+			expect(ok, "connect: " .. tostring(err))
+			local payload = '{"hello":"love-nx"}\n'
+			local sent, serr = tcp:send(payload)
+			expect(sent == #payload, "send: " .. tostring(serr) .. " sent=" .. tostring(sent))
+			local line, rerr = tcp:receive("*l")
+			tcp:close()
+			expect(line, "receive: " .. tostring(rerr))
+			log("  pc relay said: " .. tostring(line))
+		end)
+	else
+		log("  skip tcp pc relay (set PC_TCP_HOST in main.lua)")
+	end
+
+	check("tcp remote relay 7778 (optional)", function()
 		local socket = require("socket")
 		local tcp = socket.tcp()
 		expect(tcp, "socket.tcp() returned nil")
 		tcp:settimeout(10)
 		local ok, err = tcp:connect("147.182.215.255", 7778)
 		expect(ok, "connect: " .. tostring(err))
-		tcp:send('{"hello":"love-nx"}\n')
+		local payload = '{"hello":"love-nx"}\n'
+		local sent, serr = tcp:send(payload)
+		expect(sent == #payload, "send: " .. tostring(serr) .. " sent=" .. tostring(sent))
 		local line, rerr = tcp:receive("*l")
 		tcp:close()
 		expect(line, "receive: " .. tostring(rerr))
@@ -100,12 +176,13 @@ local function runChecks()
 		host:destroy()
 	end)
 
-	check("enet loopback round-trip", function()
+	check("enet LAN round-trip (best-effort)", function()
+		expect(lan_ip, "no LAN IP from udp check")
 		local enet = require("enet")
-		local server = enet.host_create("127.0.0.1:7779", 4, 2)
+		local server = enet.host_create("*:7779", 4, 2)
 		local client = enet.host_create()
 		expect(server and client, "host create failed")
-		local peer = client:connect("127.0.0.1:7779", 2)
+		local peer = client:connect(lan_ip .. ":7779", 2)
 		expect(peer, "connect returned nil")
 		local connected = false
 		local got = nil
@@ -132,8 +209,12 @@ local function runChecks()
 		end
 		server:destroy()
 		client:destroy()
-		expect(connected, "server never saw connect")
+		if not connected then
+			error("same-console ENet hairpin failed (use pc_enet_peer.py client "
+				.. lan_ip .. " against live :7777)", 0)
+		end
 		expect(got == "ping", "server got " .. tostring(got))
+		log("  enet LAN via " .. lan_ip .. ":7779")
 	end)
 
 	check("love.system.httpDownload exists", function()
@@ -163,34 +244,79 @@ local function runChecks()
 		log("  clean failure: " .. err)
 	end)
 
-	check("love.thread + Channel", function()
+	check("love.thread + Channel (R5 report-only)", function()
 		expect(love.thread and love.thread.newThread, "love.thread missing")
-		local channel = love.thread.getChannel("net-test")
-		expect(channel, "getChannel failed")
+		-- Separate channels so the main thread cannot race-pop the input value
+		-- before the worker (that race made v nil and love.threaderror blue-screen).
+		local inp = love.thread.getChannel("net-test-in")
+		local out = love.thread.getChannel("net-test-out")
+		expect(inp and out, "getChannel failed")
+		while inp:pop() ~= nil do end
+		while out:pop() ~= nil do end
 		local code = [[
-			local channel = love.thread.getChannel("net-test")
-			local v = channel:pop()
-			channel:push(v * 2)
+			local inp = love.thread.getChannel("net-test-in")
+			local out = love.thread.getChannel("net-test-out")
+			local v = inp:demand()
+			out:push(v * 2)
 		]]
 		local thread = love.thread.newThread(code)
 		expect(thread, "newThread failed")
-		channel:push(21)
-		thread:start()
+		local started = thread:start()
+		inp:push(21)
 		local deadline = os.clock() + 5
 		local got
 		while os.clock() < deadline do
-			got = channel:pop()
+			got = out:pop()
 			if got ~= nil then break end
 		end
-		expect(got == 42, "channel round-trip gave " .. tostring(got))
+		local terr = thread.getError and thread:getError() or nil
+		local running = thread.isRunning and thread:isRunning() or nil
+		log(string.format(
+			"  thread diag: started=%s got=%s err=%s running=%s",
+			tostring(started), tostring(got), tostring(terr), tostring(running)
+		))
+		expect(got == 42, "channel round-trip gave " .. tostring(got)
+			.. " err=" .. tostring(terr) .. " running=" .. tostring(running))
 	end)
+
+	if PC_ENET_HOLD then
+		local enet = require("enet")
+		local ok, host = pcall(enet.host_create, ":7777", 32, 2)
+		if ok and host then
+			live_enet_host = host
+			log("  enet live host on :7777 for pc_enet_peer.py client <switch-ip>")
+		else
+			log("  enet live host failed: " .. tostring(host))
+		end
+	end
 
 	done = true
 end
 
 function love.load()
-	t0 = love.timer and love.timer.getTime() or os.clock()
+	-- Default love.threaderror calls error() and replaces the acceptance screen.
+	-- R5 is report-only: log and keep the results table visible.
+	function love.threaderror(t, err)
+		log("  threaderror: " .. tostring(t) .. " — " .. tostring(err))
+	end
 	runChecks()
+end
+
+function love.update(_dt)
+	if not live_enet_host then return end
+	local ev = live_enet_host:service(0)
+	while ev do
+		if ev.type == "connect" then
+			log("  enet live: connect")
+			ev.peer:send("hello-from-switch", 0, "reliable")
+		elseif ev.type == "receive" then
+			log("  enet live: " .. tostring(ev.data))
+			ev.peer:send("ack:" .. ev.data, ev.channel, "reliable")
+		elseif ev.type == "disconnect" then
+			log("  enet live: disconnect")
+		end
+		ev = live_enet_host:service(0)
+	end
 end
 
 function love.draw()

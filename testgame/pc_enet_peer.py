@@ -6,14 +6,14 @@ Usage:
     python3 pc_enet_peer.py client <ip>   # connect to the Switch at <ip>:7777
 
 Either role sends "hello-from-pc" on connect, waits for a reply, and prints a
-single verdict line. Requires: pip install enet  (pyenet)
+single verdict line. Requires: pip install pyenet-dlts
 """
 import sys
 
 try:
     import enet
 except ImportError:
-    sys.exit("pip install enet")
+    sys.exit("pip install pyenet-dlts   # provides the 'enet' module")
 
 PORT = 7777
 MSG = b"hello-from-pc"

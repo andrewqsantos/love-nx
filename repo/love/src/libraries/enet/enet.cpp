@@ -50,9 +50,12 @@ extern "C" {
 
 /**
  * Parse address string, eg:
+ *	:5959
  *	*:5959
  *	127.0.0.1:*
  *	website.com:8080
+ *
+ * Empty host (":port") and "*" both mean ENET_HOST_ANY.
  */
 static void parse_address(lua_State *l, const char *addr_str, ENetAddress *address) {
 	int host_i = 0, port_i = 0;
@@ -78,10 +81,9 @@ static void parse_address(lua_State *l, const char *addr_str, ENetAddress *addre
 	host_str[host_i] = '\0';
 	port_str[port_i] = '\0';
 
-	if (host_i == 0) luaL_error(l, "Failed to parse address");
 	if (port_i == 0) luaL_error(l, "Missing port in address");
 
-	if (strcmp("*", host_str) == 0) {
+	if (host_i == 0 || strcmp("*", host_str) == 0) {
 		address->host = ENET_HOST_ANY;
 	} else {
 		if (enet_address_set_host(address, host_str) != 0) {

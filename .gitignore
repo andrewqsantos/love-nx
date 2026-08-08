@@ -1,5 +1,8 @@
+
+.DS_Store
+.audit/
+.portlibs
 build
 dist
-.portlibs
+plans/
 romfs/cacert.pem
-.audit/

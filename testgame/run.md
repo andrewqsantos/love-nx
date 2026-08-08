@@ -15,7 +15,7 @@ With the Switch in the homebrew menu's netloader (or nxlink-compatible launcher)
 
 ```sh
 export DEVKITPRO=/opt/devkitpro
-$DEVKITPRO/tools/bin/nxlink -a <SWITCH_IP> dist/love.nro -s net-test.love
+$DEVKITPRO/tools/bin/nxlink -a <SWITCH_IP> dist/love.nro -s dist/net-test.love
 ```
 
 love-nx loads `romfs:/game.love` first, then `./game.love`, then `./main.lua`
@@ -28,24 +28,48 @@ Alternative without nxlink: copy `dist/love.nro` to `/switch/love.nro` on the
 SD card and `dist/net-test.love` to `/switch/game.love`; launch from hbmenu.
 The Lua `print` output is then lost, but the on-screen table remains.
 
-## ENet LAN round-trip
+## What each check proves
 
-1. On the PC: `python3 testgame/pc_enet_peer.py server`
-2. Launch the test app on the Switch (its loopback test is separate; for the
-   PC link, host a second app or extend main.lua to connect to the PC's IP).
+- `tcp local echo` — LuaSocket TCP on-device (stack proof). Does not need a PC.
+- `tcp pc relay` — only runs if you set `PC_TCP_HOST` at the top of `main.lua`.
+- `tcp remote relay 7778 (optional)` — public gen1recomp relay. Soft/environment.
+- `enet host_create :7777 bind` — empty-host form binds all interfaces.
+- `enet LAN round-trip` — same-console via LAN IP (not 127.0.0.1).
+- Live host — after checks, the app keeps `:7777` open for a PC peer.
 
-The acceptance criterion in the task ("host on :7777, connect from a PC enet
-peer") maps to: the Switch hosts (`enet.host_create(":7777")` is exercised by
-the bind check), the PC runs `pc_enet_peer.py client <switch-ip>` against a
-Switch-side host. To keep main.lua self-contained it validates bind + loopback;
-use pc_enet_peer.py interactively for the cross-device leg.
+## TCP PC relay
+
+1. On the PC: `python3 testgame/pc_tcp_relay.py 7778`
+2. Set `PC_TCP_HOST` in `main.lua` to the PC LAN IP, repackage, push.
+3. Expect `PASS tcp pc relay …` and `ack:{"hello":"love-nx"}` in the log.
+
+Preflight the public relay from the PC before blaming the Switch:
+
+```sh
+python3 - <<'PY'
+import socket
+s=socket.create_connection(("147.182.215.255",7778),10)
+s.sendall(b'{"hello":"love-nx"}\n')
+s.settimeout(10)
+print(s.recv(4096))
+PY
+```
+
+## ENet LAN round-trip (PC peer)
+
+1. Launch the test app on the Switch (live host on `:7777`).
+2. Note the printed LAN IP from the UDP check.
+3. On the PC: `python3 testgame/pc_enet_peer.py client <switch-ip>`
+4. Expect `VERDICT: PASS` on the PC and `enet live:` lines on the Switch.
+
+Requires: `pip install pyenet-dlts` (provides the `enet` module).
 
 ## Offline leg
 
-Disable wifi on the Switch, rerun. Every check must FAIL with a printed error.
-A crash or a hang is a defect.
+Disable wifi on the Switch, rerun. Every networking check must FAIL with a
+printed error. A crash or a hang is a defect.
 
 ## Threads
 
-The "love.thread + Channel" check is the R5 sanity probe. If it fails, that is
-a report-only finding per scope.
+`love.thread + Channel (R5 report-only)` is a sanity probe. Failure is
+report-only per scope. The harness logs `getError` / `isRunning` / leftover.
