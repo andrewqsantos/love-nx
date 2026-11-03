@@ -221,6 +221,100 @@ local function runChecks()
 		expect(type(love.system.httpDownload) == "function", "missing")
 	end)
 
+	check("love.system.httpRequest exists", function()
+		expect(type(love.system.httpRequest) == "function", "missing")
+	end)
+
+	check("httpRequest HTTPS response", function()
+		if type(love.system.httpRequest) ~= "function" then
+			error("httpRequest missing")
+		end
+		local response = love.system.httpRequest(
+			"https://api.github.com/zen",
+			"GET",
+			{ "X-Signature", "opaque-test-signature" },
+			nil,
+			"love-nx-test",
+			15
+		)
+		local status, body = response:match("^STATUS (%d%d%d)\n(.*)$")
+		expect(status == "200", "unexpected response: " .. tostring(response))
+		expect(type(body) == "string" and #body > 0, "empty response")
+		log("  zen: " .. body:gsub("%s+$", ""))
+	end)
+
+	check("httpRequest rejects cleartext URLs", function()
+		local ok = pcall(function()
+			love.system.httpRequest("http://example.invalid/", "GET")
+		end)
+		expect(not ok, "accepted a non-HTTPS URL")
+	end)
+
+	check("httpRequest rejects unbounded timeouts", function()
+		local ok = pcall(function()
+			love.system.httpRequest("https://example.invalid/", "GET", nil, nil, nil, 121)
+		end)
+		expect(not ok, "accepted a timeout above the limit")
+	end)
+
+	check("httpRequest rejects signed-header injection", function()
+		local ok = pcall(function()
+			love.system.httpRequest(
+				"https://example.invalid/",
+				"GET",
+				{ "X-Signature", "valid\r\nX-Injected: yes" }
+			)
+		end)
+		expect(not ok, "accepted a header containing a newline")
+	end)
+
+	check("httpRequest returns HTTP error status and body", function()
+		local response = love.system.httpRequest(
+			"https://api.github.com/this-route-should-not-exist",
+			"GET",
+			nil,
+			nil,
+			"love-nx-test",
+			15
+		)
+		local status, body = response:match("^STATUS (%d%d%d)\n(.*)$")
+		expect(status == "404", "unexpected response: " .. tostring(response))
+		expect(type(body) == "string", "missing error response body")
+	end)
+
+	check("httpRequest returns transport error envelope", function()
+		local response = love.system.httpRequest(
+			"https://192.0.2.1/",
+			"GET",
+			nil,
+			nil,
+			"love-nx-test",
+			5
+		)
+		expect(type(response) == "string" and response:match("^ERROR .+\n$"),
+			"unexpected transport response: " .. tostring(response))
+	end)
+
+	check("httpDownload rejects path traversal", function()
+		local ok = pcall(function()
+			love.system.httpDownload("https://example.invalid/", "../escape.txt")
+		end)
+		expect(not ok, "accepted a parent-directory path")
+	end)
+
+	check("httpDownload preserves destination on HTTP error", function()
+		local path = "/net-test-preserve.txt"
+		local sentinel = "existing save"
+		expect(love.filesystem.write(path, sentinel), "could not create test file")
+		local ok = love.system.httpDownload(
+			"https://api.github.com/this-route-should-not-exist",
+			path
+		)
+		expect(ok == false, "unexpectedly accepted an HTTP error")
+		expect(love.filesystem.read(path) == sentinel, "failed download replaced the existing file")
+		love.filesystem.remove(path)
+	end)
+
 	check("httpDownload https://api.github.com/zen", function()
 		if type(love.system.httpDownload) ~= "function" then
 			error("httpDownload missing")
